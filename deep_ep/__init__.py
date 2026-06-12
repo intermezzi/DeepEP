@@ -57,7 +57,10 @@ def check_nccl_so():
         for so in [line.strip().split(' ')[-1] for line in f if 'libnccl' in line]:
             loaded_nccl_so = so if loaded_nccl_so is None else loaded_nccl_so
             assert so == loaded_nccl_so, f'Duplicate NCCL runtime found in the current system: {so} and {loaded_nccl_so}'
-    linked_nccl_so_candidates = sorted(glob.glob(f'{find_nccl_root()}/lib/libnccl.so*'))
+    linked_nccl_so_candidates = sorted(
+        glob.glob(f'{find_nccl_root()}/lib/libnccl.so*')
+        + glob.glob(f'{find_nccl_root()}/lib/*/libnccl.so*')
+    )
     assert linked_nccl_so_candidates, f'No libnccl.so found in {find_nccl_root()}/lib/'
     linked_nccl_so = linked_nccl_so_candidates[0]
 
