@@ -262,6 +262,11 @@ def get_rdma_gbs(nic_name: str = _DEFAULT_NIC_NAME) -> float:
         match = re.search(pattern, output, re.DOTALL)
         assert match
         rate = int(match.group(1))
+        assert rate > 0, f'RDMA NIC "{nic_name}" reports rate=0 (check EP_NIC_NAME)'
+        # Some deployments aggregate multiple physical ports into one logical HCA.
+        # ibstat reports the per-port rate, so scale by the number of physical ports.
+        num_ports = int(os.getenv('EP_NUM_NIC_BOND_PORTS', 1))
+        rate = rate * num_ports
         return rate / 8
     except Exception as e:
         print(f'Failed to get RDMA connection speed: {e}')
