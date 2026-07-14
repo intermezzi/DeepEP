@@ -593,7 +593,16 @@ hybrid_combine_impl(nv_bfloat16* x,
             gin.red_add_rel<ncclTeamTagRail>(
                 workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, scaleout_rank_idx),
                 expected_signal, lane_idx);
+            gin.flush<ncclCoopWarp>();
+            gin.red_add_rel<ncclTeamTagRail>(
+                workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, scaleout_rank_idx),
+                expected_signal, lane_idx);
+            gin.flush<ncclCoopWarp>();
+            gin.red_add_rel<ncclTeamTagRail>(
+                workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, scaleout_rank_idx),
+                expected_signal, lane_idx);
         }
+        gin.flush<ncclCoopWarp>();
         __syncwarp();
 
         // Wait tail arrival
@@ -601,7 +610,7 @@ hybrid_combine_impl(nv_bfloat16* x,
             const auto wait_ptr = workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, lane_idx);
             comm::timeout_while<kNumTimeoutCycles>([=](const bool& is_last_check) {
                 const auto signal = ptx::ld_acquire_sys<int64_t>(wait_ptr);
-                if (signal == expected_signal) {
+                if (signal >= expected_signal) {
                     // Clean for next usages
                     *wait_ptr = 0;
                     return true;
@@ -620,7 +629,9 @@ hybrid_combine_impl(nv_bfloat16* x,
         __syncwarp();
     }
 
-    // No barrier at epilogue
+    comm::gpu_barrier<true, kNumScaleoutRanks, kNumScaleupRanks,
+                    kNumSMs, kNumThreads, kNumQPs, kNumTimeoutCycles, comm::kHybridCombineTag1, false, false, true>(
+    gin, workspace_layout, scaleout_rank_idx, scaleup_rank_idx, sm_idx, thread_idx);
 }
 
 }  // namespace deep_ep::elastic
