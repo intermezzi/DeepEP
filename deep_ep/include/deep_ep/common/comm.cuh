@@ -43,6 +43,18 @@ __device__ __forceinline__ void timeout_while(const bool& condition, const func_
             // Wait another 1 second to let all threads print information and trap
             start_clock = clock64();
             while (clock64() - start_clock < kNumOneSecCycles) {}
+#ifdef EP_TIMEOUT_WAIT_GDB
+            // Instead of trap, sleep for ~1 hour to allow cuda-gdb attach
+            // NOTES: do not use elect_one_sync here; the warp may have diverged (some lanes
+            // already broke out of the wait loop), which can make elect_one skip the printing lane.
+            // printf("DeepEP timeout: waiting for cuda-gdb (sleep 1h). "
+            //        "Attach with: cuda-gdb -p <pid>\n");
+            for (int _wait = 0; _wait < 3600; ++ _wait) {
+                // Sleep ~1 second per iteration (nanosleep 1ms * 1000)
+                for (int _ms = 0; _ms < 1000; ++ _ms)
+                    __nanosleep(1000000U);  // 1ms
+            }
+#endif
             ptx::trap();
         }
     }
