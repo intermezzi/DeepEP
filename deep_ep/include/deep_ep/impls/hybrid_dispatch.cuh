@@ -489,6 +489,13 @@ hybrid_dispatch_impl(
         int stored_finish_flag = lane_idx >= kNumScaleoutRanks;
         int stored_scaleout_tail_idx = 0;
         int recv_scaleout_rank_idx = channel_idx % kNumScaleoutRanks;
+
+        // Clean signaled tail pointer to prevent residual values from previous iterations
+        // (late RDMA atomic adds from previous combine may arrive after combine's cleanup)
+        if (lane_idx < kNumScaleoutRanks)
+            *workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, lane_idx) = 0;
+        __syncwarp();
+
         uint32_t wip_mask;
         while ((wip_mask = ptx::gather(stored_scaleout_tail_idx > stored_scaleout_old_tail_idx or stored_finish_flag == 0))) {
             // Pick next rank in round-robin

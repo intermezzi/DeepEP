@@ -96,6 +96,14 @@ hybrid_combine_impl(nv_bfloat16* x,
                       kNumSMs, kNumThreads, kNumQPs, kNumTimeoutCycles, comm::kHybridCombineTag0, false, true, true>(
         gin, workspace_layout, scaleout_rank_idx, scaleup_rank_idx, sm_idx, thread_idx);
 
+    // Clean signaled tail pointers to prevent residual values from previous iterations
+    // (late RDMA atomic adds may arrive after the previous cleanup)
+    for (int i = 0; i < kNumChannels; ++ i) {
+        if (lane_idx < kNumScaleoutRanks)
+            *workspace_layout.get_scaleout_channel_signaled_tail_ptr(i, lane_idx) = 0;
+    }
+    __syncwarp();
+
     // Adjust register count at certain cases
     // TODO: support more cases, or try to make channel count more aligned
     const bool kAdjustRegisters = (kNumChannelsPerSM == 4 or kNumChannelsPerSM == 8) and not kUseExpandedLayout;
