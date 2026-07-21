@@ -253,21 +253,61 @@ def get_rdma_gbs(nic_name: str = _DEFAULT_NIC_NAME) -> float:
     Returns:
         gbs: the RDMA bandwidth in GB/s (0 if detection fails).
     """
-    # noinspection PyBroadException
-    try:
-        result = subprocess.run(['ibstat'], capture_output=True, text=True, check=True)
-        output = result.stdout
+    errors = []
 
-        pattern = rf"CA '{nic_name}'.*?Port \d+:\s*.*?Rate:\s*(\d+)"
-        match = re.search(pattern, output, re.DOTALL)
-        assert match
-        rate = int(match.group(1))
-        assert rate > 0, f'RDMA NIC "{nic_name}" reports rate=0 (check EP_NIC_NAME)'
-        # Some deployments aggregate multiple physical ports into one logical HCA.
-        # ibstat reports the per-port rate, so scale by the number of physical ports.
-        num_ports = int(os.getenv('EP_NUM_NIC_BOND_PORTS', 1))
-        rate = rate * num_ports
-        return rate / 8
+    def netdev_gbs(name: str) -> float:
+        # /sys/class/net/<name>/speed is reported in Mb/s
+        try:
+            with open(f'/sys/class/net/{name}/speed') as f:
+                mbs = float(f.read().strip())
+            return mbs / 8000 if mbs > 0 else 0
+        except Exception:
+            return 0
+
+    # 1) RoCE LAG: ibstat / per-port sysfs only see a single slave's rate,
+    #    so prefer the aggregate speed reported on the upper bond netdev.
+    try:
+        ib_net_dir = f'/sys/class/infiniband/{nic_name}/device/net'
+        for netdev in sorted(os.listdir(ib_net_dir)):
+            for entry in os.listdir(f'{ib_net_dir}/{netdev}'):
+                if not entry.startswith('upper_'):
+                    continue
+                bond = entry[len('upper_'):]
+                if os.path.isdir(f'/sys/class/net/{bond}/bonding'):
+                    gbs = netdev_gbs(bond)
+                    if gbs > 0:
+                        return gbs
     except Exception as e:
-        print(f'Failed to get RDMA connection speed: {e}')
-        return 0
+        errors.append(f'bond: {e}')
+
+    # 2) ibstat (per-port rate)
+    try:
+        out = subprocess.run(['ibstat'], capture_output=True, text=True, check=True).stdout
+        m = re.search(rf"CA '{nic_name}'.*?Rate:\s*(\d+)", out, re.DOTALL)
+        if m:
+            return int(m.group(1)) / 8
+    except Exception as e:
+        errors.append(f'ibstat: {e}')
+
+    # 3) sysfs port rate (e.g. "400 Gb/sec (4X NDR)"), then plain netdev speed.
+    #    Matches NCCL's strategy and works in containers without `ibstat`.
+    scale = {'G': 1, 'M': 1e-3, 'K': 1e-6, '': 1e-9}
+    try:
+        port_dir = f'/sys/class/infiniband/{nic_name}/ports'
+        for port in sorted(os.listdir(port_dir)):
+            try:
+                with open(f'{port_dir}/{port}/rate') as f:
+                    text = f.read().strip()
+            except FileNotFoundError:
+                continue
+            m = re.search(r'([\d.]+)\s*([GMK]?)[bB]/sec', text)
+            if m:
+                return float(m.group(1)) * scale[m.group(2).upper()] / 8
+        gbs = netdev_gbs(nic_name)
+        if gbs > 0:
+            return gbs
+    except Exception as e:
+        errors.append(f'sysfs: {e}')
+
+    print(f'Failed to get RDMA connection speed for {nic_name}: {"; ".join(errors)}')
+    return 0
