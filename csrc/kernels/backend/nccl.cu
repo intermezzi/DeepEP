@@ -147,6 +147,12 @@ NCCLSymmetricMemoryContext::NCCLSymmetricMemoryContext(const int64_t& nccl_comm,
         NCCL_CHECK(ncclGetLsaDevicePointer(window, 0, i, &nvl_window_ptrs[i]));
 }
 
+ncclResult_t NCCLSymmetricMemoryContext::query_async_error() const {
+    ncclResult_t err = ncclSuccess;
+    ncclCommGetAsyncError(comm, &err);   // this is what emits WARN("GIN Error detected")
+    return err;
+}
+
 void* NCCLSymmetricMemoryContext::get_sym_ptr(void* ptr, const int& dst_rank_idx) const {
     const auto offset = static_cast<uint8_t*>(ptr) - static_cast<uint8_t*>(mapped_window_ptr);
     return static_cast<uint8_t*>(nvl_window_ptrs[dst_rank_idx]) + offset;

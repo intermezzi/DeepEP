@@ -66,6 +66,7 @@ public:
 
     // NCCL handles
     ncclComm_t comm;
+    ncclResult_t query_async_error() const;
     jit::NoRefPtr dev_comm;
     ncclWindow_t window;
     void* mapped_window_ptr;

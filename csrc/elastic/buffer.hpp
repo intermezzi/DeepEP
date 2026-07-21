@@ -5,6 +5,11 @@
 #include <numeric>
 #include <vector>
 #include <pybind11/functional.h>
+#include <thread>
+#include <atomic>
+#include <chrono>
+#include <ctime>
+#include <cstdio>
 
 #include <deep_ep/common/layout.cuh>
 #include <deep_ep/common/compiled.cuh>
@@ -52,6 +57,16 @@ class ElasticBuffer {
 
     // NCCL context
     std::shared_ptr<nccl::NCCLSymmetricMemoryContext> nccl_context;
+
+    // ---- GIN async-error watchdog (diagnostic) ----
+    std::thread gin_watchdog_thread;
+    std::atomic<bool> gin_watchdog_stop{false};
+
+    void stop_gin_watchdog() {
+        gin_watchdog_stop.store(true, std::memory_order_relaxed);
+        if (gin_watchdog_thread.joinable())
+            gin_watchdog_thread.join();
+    }
 
     // Some EP hybrid mode settings
     static constexpr int kNumMaxChannelsPerSM = 8;
@@ -134,12 +149,33 @@ public:
         CUDA_RUNTIME_CHECK(cudaHostGetDevicePointer(&mapped_host_workspace, host_workspace, 0));
         std::memset(host_workspace, 0, layout::WorkspaceLayout::get_num_bytes());
 
+
+        // ---- Start GIN async-error watchdog (polls the NCCL comm off-kernel) ----
+        gin_watchdog_thread = std::thread([this]() {
+            while (not gin_watchdog_stop.load(std::memory_order_relaxed)) {
+                ncclResult_t err = ncclSuccess;
+                // This is the call that emits WARN("GIN Error detected") and
+                // returns ncclRemoteError once a GIN/GDAKI QP goes to ERROR.
+                ncclCommGetAsyncError(nccl_context->comm, &err);
+                if (err != ncclSuccess) {
+                    fprintf(stderr,
+                            "[DeepEP][rank %d] NCCL async error=%d (%s) t=%ld\n",
+                            nccl_context->rank_idx, static_cast<int>(err),
+                            ncclGetErrorString(err),
+                            static_cast<long>(time(nullptr)));
+                    fflush(stderr);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+        });
+
         // We should call a barrier at the end
         // The barrier should be called by Python `dist.barrier`
         // NOTES: do not call our barrier, as the workspace is not ready yet
     }
 
     ~ElasticBuffer() noexcept(false) {
+	stop_gin_watchdog();
         if (not explicitly_destroy)
             destroy();
 
@@ -151,6 +187,7 @@ public:
 
     void destroy() {
         EP_HOST_ASSERT(not destroyed);
+	stop_gin_watchdog();
 
         // Finish all works on all GPUs
         barrier(true, true);

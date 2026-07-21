@@ -590,7 +590,12 @@ hybrid_combine_impl(nv_bfloat16* x,
         // Update, wait and clean
         EP_STATIC_ASSERT(kNumScaleoutRanks <= 32, "Invalid ranks");
         const auto expected_signal = math::pack2<int, int64_t>(1, 0);
+        const auto t_before = clock64();
         gin.flush<ncclCoopWarp>();
+        const auto dt = clock64() - t_before;
+        if (ptx::elect_one_sync() && dt > kNumTimeoutCycles / 4)   // e.g. >25s
+            printf("DeepEP combine flush slow: channel=%d scaleout=%d scaleup=%d cycles=%lld\n",
+                   channel_idx, scaleout_rank_idx, scaleup_rank_idx, (long long)dt);
         if (lane_idx < kNumScaleoutRanks) {
             // Update remote tails
             gin.red_add_rel<ncclTeamTagRail>(
