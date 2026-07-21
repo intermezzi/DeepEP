@@ -1,0 +1,52 @@
+[W721 11:59:25.078957997 Utils.hpp:137] Warning: Environment variable TORCH_NCCL_TRACE_BUFFER_SIZE is deprecated; use TORCH_FR_BUFFER_SIZE instead (function operator())
+[W721 11:59:25.079208430 Utils.hpp:137] Warning: Environment variable TORCH_NCCL_TRACE_BUFFER_SIZE is deprecated; use TORCH_FR_BUFFER_SIZE instead (function operator())
+[W721 11:59:25.079604847 Utils.hpp:137] Warning: Environment variable TORCH_NCCL_TRACE_BUFFER_SIZE is deprecated; use TORCH_FR_BUFFER_SIZE instead (function operator())
+[W721 11:59:25.080185009 Utils.hpp:137] Warning: Environment variable TORCH_NCCL_TRACE_BUFFER_SIZE is deprecated; use TORCH_FR_BUFFER_SIZE instead (function operator())
+Config:
+ > Ranks: 2 x 4
+ > Experts: 6/256
+ > Tokens: 4092 (max: 4096), hidden: 7168
+ > #SM: 64, #QPs: 129/129
+
+Running all test cases:
+ > Testing with do_handle_copy=1, expert_alignment=128, use_fp8_dispatch=1, num_bias=0, with_previous_event=0, async_with_compute_stream=0, allocate_on_comm_stream=0 ...
+DeepEP Gin barrier timeout, tag: 6, scaleout: 1, scaleup: 3, thread: 0, signal: 1, target: 2
+DeepEP Gin barrier timeout, tag: 6, scaleout: 1, scaleup: 1, thread: 0, signal: 1, target: 2
+DeepEP Gin barrier timeout, tag: 6, scaleout: 1, scaleup: 0, thread: 0, signal: 1, target: 2
+DeepEP Gin barrier timeout, tag: 6, scaleout: 1, scaleup: 2, thread: 0, signal: 1, target: 2
+`destroy()` is not called before DeepEP elastic buffer destruction, which can leak resources.
+`destroy()` is not called before DeepEP elastic buffer destruction, which can leak resources.
+`destroy()` is not called before DeepEP elastic buffer destruction, which can leak resources.
+`destroy()` is not called before DeepEP elastic buffer destruction, which can leak resources.
+Traceback (most recent call last):
+  File "/home/lyh437841/DeepEP/tests/elastic/test_ep.py", line 609, in <module>
+    torch.multiprocessing.spawn(test_loop, args=(num_processes, args), nprocs=num_processes)
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 340, in spawn
+    return start_processes(fn, args, nprocs, join, daemon, start_method="spawn")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 296, in start_processes
+    while not context.join():
+              ^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 211, in join
+    raise ProcessRaisedException(msg, error_index, failed_process.pid)
+torch.multiprocessing.spawn.ProcessRaisedException: 
+
+-- Process 1 terminated with the following error:
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 87, in _wrap
+    fn(i, *args)
+  File "/usr/local/lib/python3.12/dist-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lyh437841/DeepEP/tests/elastic/test_ep.py", line 545, in test_loop
+    test_dispatch_combine(buffer, args)
+  File "/home/lyh437841/DeepEP/tests/elastic/test_ep.py", line 159, in test_dispatch_combine
+    launch(buffer, 'dispatch', with_previous_event, async_with_compute_stream, expanded_dispatch_args)
+  File "/home/lyh437841/DeepEP/tests/elastic/test_ep.py", line 39, in launch
+    values = getattr(buffer, name)(**params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/deep_ep/buffers/elastic.py", line 976, in dispatch
+    event) = self.runtime.dispatch(x, sf, topk_idx, topk_weights,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Dispatch CPU wait exception (/root/DeepEP/csrc/elastic/buffer.hpp:1063): CPU side received count (scaleup: 1): 0 0 0 0 # 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 
+
