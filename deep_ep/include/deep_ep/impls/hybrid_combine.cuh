@@ -594,6 +594,7 @@ hybrid_combine_impl(nv_bfloat16* x,
                 workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, scaleout_rank_idx),
                 expected_signal, lane_idx);
         }
+        gin.flush<ncclCoopWarp>();
         __syncwarp();
 
         // Wait tail arrival
