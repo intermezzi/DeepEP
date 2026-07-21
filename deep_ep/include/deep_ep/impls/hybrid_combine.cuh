@@ -620,7 +620,9 @@ hybrid_combine_impl(nv_bfloat16* x,
         __syncwarp();
     }
 
-    // No barrier at epilogue
+    comm::gpu_barrier<true, kNumScaleoutRanks, kNumScaleupRanks,
+                      kNumSMs, kNumThreads, kNumQPs, kNumTimeoutCycles, comm::kHybridCombineTag1, false, false, true>(
+        gin, workspace_layout, scaleout_rank_idx, scaleup_rank_idx, sm_idx, thread_idx);
 }
 
 }  // namespace deep_ep::elastic
