@@ -623,7 +623,7 @@ hybrid_combine_impl(nv_bfloat16* x,
         if (lane_idx < kNumScaleoutRanks) {
             const auto put_ptr = workspace_layout.get_put_completion_ptr(channel_idx, lane_idx);
             const auto va_ptr = workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, lane_idx);
-            comm::timeout_while<kNumTimeoutCycles>([=](const bool& is_last_check) {
+            comm::timeout_while<kNumTimeoutCycles * 2>([=](const bool& is_last_check) {
                 const auto put_val = ptx::ld_acquire_sys<int64_t>(put_ptr);
                 if (put_val == combine_epoch) {
                     // Ordinary put arrived — check VA signal as diagnostic
