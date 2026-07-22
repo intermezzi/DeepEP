@@ -352,15 +352,6 @@ hybrid_combine_impl(nv_bfloat16* x,
     } else {
         const auto forward_warp_idx = warp_idx - kNumScaleupWarps;
         const auto channel_idx = sm_idx * kNumChannelsPerSM + forward_warp_idx;
-        constexpr bool kDebugDropScaleoutWaitAllSignal = true;
-        constexpr int kDebugDropSrcScaleoutRank = 0;
-        constexpr int kDebugDropDstScaleoutRank = 1;
-        constexpr int kDebugDropChannel = 0;
-        const bool debug_drop_scaleout_wait_all_signal =
-            kDebugDropScaleoutWaitAllSignal and
-            scaleout_rank_idx == kDebugDropSrcScaleoutRank and
-            lane_idx == kDebugDropDstScaleoutRank and
-            channel_idx == kDebugDropChannel;
 
         // Adjust registers
         if constexpr (kAdjustRegisters)
@@ -598,7 +589,7 @@ hybrid_combine_impl(nv_bfloat16* x,
         EP_STATIC_ASSERT(kNumScaleoutRanks <= 32, "Invalid ranks");
         const auto expected_signal = math::pack2<int, int64_t>(1, 0);
         gin.flush<ncclCoopWarp>();
-        if (lane_idx < kNumScaleoutRanks and not debug_drop_scaleout_wait_all_signal) {
+        if (lane_idx < kNumScaleoutRanks) {
             // Update remote tails
             gin.red_add_rel<ncclTeamTagRail>(
                 workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, scaleout_rank_idx),
@@ -613,7 +604,7 @@ hybrid_combine_impl(nv_bfloat16* x,
             *completion_slot = combine_epoch;
         }
         __syncwarp();
-        if (lane_idx < kNumScaleoutRanks and not debug_drop_scaleout_wait_all_signal) {
+        if (lane_idx < kNumScaleoutRanks) {
             auto* completion_slot = workspace_layout.get_put_completion_ptr(channel_idx, scaleout_rank_idx);
             gin.put<ncclTeamTagRail>(
                 completion_slot,      // remote dst (symmetric addr on peer)
