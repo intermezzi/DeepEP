@@ -76,6 +76,9 @@ struct WorkspaceLayout {
         // AGRS signals
         num_bytes += (kNumMaxInflightAGRS + 1) * kNumMaxRanks * sizeof(int);
 
+        // Debug: put completion slots [channel][src_scaleout_rank]
+        num_bytes += kNumMaxChannels * kNumMaxRanks * sizeof(int64_t);
+
         return num_bytes;
     }
 
@@ -173,6 +176,14 @@ struct WorkspaceLayout {
         const auto base_ptr = math::advance_ptr<int>(
             get_agrs_recv_signal_ptr(0, 0), kNumMaxInflightAGRS * kNumMaxRanks * sizeof(int));
         return base_ptr + rank_idx;
+    }
+
+    // Debug: independent 8-byte ordinary put completion slot
+    __forceinline__ __device__ __host__ int64_t* get_put_completion_ptr(
+        const int& channel_idx, const int& src_scaleout_rank_idx) const {
+        const auto base_ptr = math::advance_ptr<int64_t>(
+            get_agrs_session_signal_ptr(0), kNumMaxRanks * sizeof(int));
+        return base_ptr + (channel_idx * num_scaleout_ranks + src_scaleout_rank_idx);
     }
 };
 

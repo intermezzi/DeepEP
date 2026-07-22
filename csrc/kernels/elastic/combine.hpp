@@ -38,6 +38,7 @@ public:
         void* workspace;
         int scaleout_rank_idx, scaleup_rank_idx;
         int num_reduced_tokens;
+        int64_t combine_epoch;
 
         jit::LaunchArgs launch_args;
     };
@@ -101,7 +102,8 @@ static void __instantiate_kernel() {{
                                                      args.nccl_dev_comm, args.nccl_window,
                                                      args.buffer, args.workspace,
                                                      args.scaleout_rank_idx, args.scaleup_rank_idx,
-                                                     args.num_reduced_tokens));
+                                                     args.num_reduced_tokens,
+                                                     args.combine_epoch));
         }
     }
 };
@@ -130,6 +132,10 @@ static void* launch_combine(void* x,
                             const int& num_channels,
                             const bool& use_expanded_layout, const bool& allow_multiple_reduction,
                             const at::cuda::CUDAStream& stream) {
+    // Debug: monotonically increasing epoch for combine completion detection
+    static int64_t s_combine_epoch = 0;
+    const int64_t combine_epoch = ++s_combine_epoch;
+
     // Maximize shared memory utilization
     const auto token_layout = get_combine_token_layout(hidden, sizeof(nv_bfloat16), num_topk);
     auto num_warps = std::min(num_smem_bytes / token_layout.get_num_bytes<true>(), 32);
@@ -170,6 +176,7 @@ static void* launch_combine(void* x,
         .buffer = buffer, .workspace = workspace,
         .scaleout_rank_idx = scaleout_rank_idx, .scaleup_rank_idx = scaleup_rank_idx,
         .num_reduced_tokens = num_reduced_tokens,
+        .combine_epoch = combine_epoch,
         // NOTES: make cluster dim 2 to overlap with clustered computation kernels
         .launch_args = jit::LaunchArgs(num_sms, num_threads, num_smem_bytes, 2 - (num_sms % 2), true)
     };

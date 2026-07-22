@@ -39,7 +39,8 @@ hybrid_combine_impl(nv_bfloat16* x,
                     const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
                     void* buffer, void* workspace,
                     const int scaleout_rank_idx, const int scaleup_rank_idx,
-                    int num_reduced_tokens) {
+                    int num_reduced_tokens,
+                    int64_t combine_epoch) {
     // Utils
     const auto sm_idx = static_cast<int>(blockIdx.x);
     const auto thread_idx = static_cast<int>(threadIdx.x);
@@ -595,25 +596,59 @@ hybrid_combine_impl(nv_bfloat16* x,
                 expected_signal, lane_idx);
         }
         gin.flush<ncclCoopWarp>();
+
+        // Debug: independent 8-byte ordinary put as completion notification
+        // Each source rank writes epoch to its own completion slot, then puts it to the peer
+        if (lane_idx < kNumScaleoutRanks) {
+            auto* completion_slot = workspace_layout.get_put_completion_ptr(channel_idx, scaleout_rank_idx);
+            *completion_slot = combine_epoch;
+        }
+        __syncwarp();
+        if (lane_idx < kNumScaleoutRanks) {
+            auto* completion_slot = workspace_layout.get_put_completion_ptr(channel_idx, scaleout_rank_idx);
+            gin.put<ncclTeamTagRail>(
+                completion_slot,      // remote dst (symmetric addr on peer)
+                completion_slot,      // local src
+                sizeof(int64_t),
+                lane_idx,
+                0                     // no aggregation — independent request
+            );
+        }
+        gin.flush<ncclCoopWarp>();
         __syncwarp();
 
-        // Wait tail arrival
+        // Wait tail arrival (via ordinary put, VA signal as diagnostic)
         if (lane_idx < kNumScaleoutRanks) {
-            const auto wait_ptr = workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, lane_idx);
+            const auto put_ptr = workspace_layout.get_put_completion_ptr(channel_idx, lane_idx);
+            const auto va_ptr = workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, lane_idx);
             comm::timeout_while<kNumTimeoutCycles>([=](const bool& is_last_check) {
-                const auto signal = ptx::ld_acquire_sys<int64_t>(wait_ptr);
-                if (signal == expected_signal) {
+                const auto put_val = ptx::ld_acquire_sys<int64_t>(put_ptr);
+                if (put_val == combine_epoch) {
+                    // Ordinary put arrived — check VA signal as diagnostic
+                    const auto va_signal = ptx::ld_acquire_sys<int64_t>(va_ptr);
+                    if (va_signal != expected_signal) {
+                        printf("[DIAG] put_seen=1, va_seen=0, scale-out: %d/%d, scale-up: %d/%d, "
+                               "channel: %d, peer: %d, epoch: %lld, va: %lld\n",
+                               scaleout_rank_idx, kNumScaleoutRanks, scaleup_rank_idx, kNumScaleupRanks,
+                               channel_idx, lane_idx, combine_epoch, va_signal);
+                    }
                     // Clean for next usages
-                    *wait_ptr = 0;
+                    *put_ptr = 0;
+                    *va_ptr = 0;
                     return true;
                 }
 
                 if (is_last_check) {
-                    printf("DeepEP combine (scale-out wait all) timeout, scale-out: %d/%d, scale-up: %d/%d, "
-                           "channel: %d, lane: %d, signal: %lld, expected: %lld\n",
+                    const auto va_val = ptx::ld_acquire_sys<int64_t>(va_ptr);
+                    printf("DeepEP combine (scale-out wait all) timeout, "
+                           "rank: %d, scale-out: %d/%d, scale-up: %d/%d, "
+                           "sm: %d, fwd_warp: %d, channel: %d, qp: %d, sharing: %d, "
+                           "peer: %d, epoch: %lld, put: %lld, va: %lld\n",
+                           scaleout_rank_idx * kNumScaleupRanks + scaleup_rank_idx,
                            scaleout_rank_idx, kNumScaleoutRanks, scaleup_rank_idx, kNumScaleupRanks,
-                           channel_idx, lane_idx,
-                           signal, expected_signal);
+                           sm_idx, forward_warp_idx, channel_idx,
+                           qp_idx, static_cast<int>(sharing_mode),
+                           lane_idx, combine_epoch, put_val, va_val);
                 }
                 return false;
             });
