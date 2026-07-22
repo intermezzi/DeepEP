@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deep_ep/common/comm.cuh>
+#include <deep_ep/common/gin_debug.cuh>
 #include <deep_ep/common/layout.cuh>
 #include <deep_ep/common/math.cuh>
 #include <deep_ep/common/ptx.cuh>
@@ -628,7 +629,7 @@ hybrid_combine_impl(nv_bfloat16* x,
         if (lane_idx < kNumScaleoutRanks) {
             const auto put_ptr = workspace_layout.get_put_completion_ptr(channel_idx, lane_idx);
             const auto va_ptr = workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, lane_idx);
-            comm::timeout_while<kNumTimeoutCycles * 2>([=](const bool& is_last_check) {
+            comm::timeout_while<kNumTimeoutCycles * 2>([=, &gin](const bool& is_last_check) {
                 const auto put_val = ptx::ld_acquire_sys<int64_t>(put_ptr);
                 if (put_val == combine_epoch) {
                     // Ordinary put arrived — check VA signal as diagnostic
@@ -658,6 +659,17 @@ hybrid_combine_impl(nv_bfloat16* x,
                            qp_idx, static_cast<int>(sharing_mode),
                            kNumSMs, kNumQPs, kNumChannels, kNumChannelsPerSM,
                            lane_idx, combine_epoch, put_val, va_val);
+
+                    // This lane is blocked on the "done" signal from scale-out rank `lane_idx`,
+                    // which never arrived -- i.e. the rail QP to that peer is wedged. The same QP
+                    // carried our own done-signal (the red_add_rel above), so its send CQ holds the
+                    // NIC error syndrome. Skip the local lane (NVLink, never an RDMA fault). Each
+                    // remote lane dumps its own peer, so no warp election is needed (the dump does
+                    // no warp-collective ops and is safe under divergence).
+                    if (lane_idx != scaleout_rank_idx)
+                        comm::debug::dump_scaleout_qp_state(
+                            gin, lane_idx, scaleout_rank_idx, scaleup_rank_idx, channel_idx,
+                            "combine-scaleout-wait");
                 }
                 return false;
             });
