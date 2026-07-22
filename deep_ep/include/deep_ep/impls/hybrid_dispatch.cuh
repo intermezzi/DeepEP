@@ -3,6 +3,7 @@
 #include <deep_ep/common/comm.cuh>
 #include <deep_ep/common/compiled.cuh>
 #include <deep_ep/common/exception.cuh>
+#include <deep_ep/common/gin_debug.cuh>
 #include <deep_ep/common/layout.cuh>
 #include <deep_ep/common/math.cuh>
 #include <deep_ep/common/ptx.cuh>
@@ -546,6 +547,24 @@ hybrid_dispatch_impl(
                                dispatch_epoch, put_val,
                                stored_scaleout_old_tail_idx,
                                stored_finish_flag, stored_scaleout_tail_idx);
+                    }
+
+                    // The forward warp only *reads* memory that scale-out peers RDMA-write into
+                    // us, so a stall here means the peer's writes/tail-signals never landed. Crack
+                    // open the GDA-KI layer and dump our own send QP(s) toward each remote scale-out
+                    // peer: on a rail (RC) fault the error CQE shows up on our side too, so we can
+                    // read the actual NIC syndrome (e.g. TRANSPORT_RETRY_EXC_ERR) instead of guessing.
+                    // One thread drives it to avoid a 32x print storm right before the trap.
+                    // NOTE: no __syncwarp() here -- lanes may diverge on `is_last_check`
+                    // (per-thread clock64), matching the printf above; elect_one_sync uses
+                    // the active mask so it is safe under partial warp participation.
+                    if (ptx::elect_one_sync()) {
+                        #pragma unroll
+                        for (int peer_so = 0; peer_so < kNumScaleoutRanks; ++ peer_so)
+                            if (peer_so != scaleout_rank_idx)
+                                comm::debug::dump_scaleout_qp_state(
+                                    gin, peer_so, scaleout_rank_idx, scaleup_rank_idx, channel_idx,
+                                    "dispatch-fwd");
                     }
                     return false;
                 }
