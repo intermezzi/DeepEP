@@ -355,6 +355,7 @@ The library provides some environment variables, which may be useful:
     - `EP_JIT_DUMP_SASS`: `0` or `1`, dump SASS output, `0` by default
 - Debug and profiling
     - `EP_GIN_GDAKI_DEBUG`: `0` or `1`, enable NCCL Gin GDAKI debugging output, `0` by default
+    - `CUDA_DEVICE_WAITS_ON_EXCEPTION`: set to `1` to make CUDA wait at the timeout trap for cuda-gdb attachment; this is a CUDA runtime option and does not change the JIT cache key
     - `EP_USE_NVIDIA_TOOLS`: `0` or `1`, skip internal profiling when running under external NVIDIA tools, `0` by default
     - `EP_DISABLE_BARRIER_PROFILING`: `0` or `1`, disable barrier-based communication profiling in benchmarks, `0` by default
 - Build

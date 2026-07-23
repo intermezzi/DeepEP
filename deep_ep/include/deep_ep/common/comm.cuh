@@ -11,6 +11,7 @@
 namespace deep_ep::elastic::comm {
 
 static constexpr int64_t kNumOneSecCycles = 2000000000;  // An approximation of the GPU clock at 2000 MHz
+static constexpr int64_t kTimeoutDumpGraceCycles = 10 * kNumOneSecCycles;
 
 // Some reserved tags
 static constexpr int kDeviceBarrierTag = 0;
@@ -40,21 +41,15 @@ __device__ __forceinline__ void timeout_while(const bool& condition, const func_
             break;
 
         if (timeout) {
-            // Wait another 1 second to let all threads print information and trap
+            // Give slower QP/CQ dump lanes time to finish before another lane
+            // traps the whole kernel. Sleep instead of busy-spinning so the
+            // diagnostic lane can continue to make progress.
             start_clock = clock64();
-            while (clock64() - start_clock < kNumOneSecCycles) {}
-#ifdef EP_TIMEOUT_WAIT_GDB
-            // Instead of trap, sleep for ~1 hour to allow cuda-gdb attach
-            // NOTES: do not use elect_one_sync here; the warp may have diverged (some lanes
-            // already broke out of the wait loop), which can make elect_one skip the printing lane.
-            // printf("DeepEP timeout: waiting for cuda-gdb (sleep 1h). "
-            //        "Attach with: cuda-gdb -p <pid>\n");
-            for (int _wait = 0; _wait < 3600; ++ _wait) {
-                // Sleep ~1 second per iteration (nanosleep 1ms * 1000)
-                for (int _ms = 0; _ms < 1000; ++ _ms)
-                    __nanosleep(1000000U);  // 1ms
-            }
-#endif
+            while (clock64() - start_clock < kTimeoutDumpGraceCycles)
+                __nanosleep(1000000U);  // ~1 ms
+
+            // For debugger attachment, set CUDA_DEVICE_WAITS_ON_EXCEPTION=1.
+            // CUDA will then hold the application at this device exception.
             ptx::trap();
         }
     }
