@@ -551,6 +551,7 @@ hybrid_dispatch_impl(
                                dispatch_epoch, put_val,
                                stored_scaleout_old_tail_idx,
                                stored_finish_flag, stored_scaleout_tail_idx);
+                        comm::poll_cqe_on_timeout(gin, lane_idx, qp_idx);
                     }
 
                     // The forward warp only *reads* memory that scale-out peers RDMA-write into

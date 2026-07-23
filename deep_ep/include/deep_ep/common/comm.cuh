@@ -28,6 +28,30 @@ static constexpr int kHybridCombineTag1 = 9;
 // Some reserved count
 static constexpr int kFlushAllAllocatedQPs = -1;
 
+// Debug: poll SQ CQE to detect QP error state on timeout.
+// NOTES: GDAKI-specific. Reads the last pending WQE's CQE without posting new
+// WQEs. Error CQEs are not consumed by gin.flush() (cqe_ci only advances on
+// success), so they remain detectable after timeout.
+// cqe_status: 0=ok, <0=QP_ERROR, >0=pending.
+__device__ __forceinline__ void poll_cqe_on_timeout(
+        const handle::NCCLGin& gin, const int& peer, const int& qp_idx) {
+    const auto gdaki = static_cast<struct ncclGinGdakiGPUContext*>(
+        gin.gin._ginHandle) + gin.gin.contextId;
+    const auto qp = gdaki->gdqp + peer;
+    const auto sq_rsvd = qp->sq_rsvd_index;
+    if (sq_rsvd == 0) {
+        printf("[CQE-POLL] peer=%d, qp=%d, sq_rsvd=0, status=N/A (no pending WQE)\n",
+               peer, qp_idx);
+        return;
+    }
+    const auto ticket = sq_rsvd - 1;
+    const auto status = doca_gpu_dev_verbs_poll_one_cq_at<
+        DOCA_GPUNETIO_VERBS_RESOURCE_SHARING_MODE_GPU>(&qp->cq_sq, ticket);
+    printf("[CQE-POLL] peer=%d, qp=%d, sq_rsvd=%llu, ticket=%llu, cqe_status=%d (%s)\n",
+           peer, qp_idx, (unsigned long long)sq_rsvd, (unsigned long long)ticket,
+           status, status == 0 ? "ok" : (status < 0 ? "QP_ERROR" : "pending"));
+}
+
 template <int64_t kNumTimeoutCycles, typename func_t>
 __device__ __forceinline__ void timeout_while(const bool& condition, const func_t& func,
                                               int64_t start_clock = 0) {
