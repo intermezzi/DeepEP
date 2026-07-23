@@ -46,7 +46,8 @@ hybrid_dispatch_impl(
     const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
     void* buffer,
     void* workspace, void* mapped_host_workspace,
-    const int scaleout_rank_idx, const int scaleup_rank_idx) {
+    const int scaleout_rank_idx, const int scaleup_rank_idx,
+    const int64_t dispatch_epoch) {
     constexpr int kNumExpertsPerRank = kNumExperts / kNumRanks;
     constexpr int kNumExpertsPerScaleout = kNumExperts / kNumScaleoutRanks;
     EP_STATIC_ASSERT(kNumExperts % kNumScaleupRanks == 0, "Invalid number of experts or ranks");
@@ -162,8 +163,11 @@ hybrid_dispatch_impl(
 
                     if (is_last_check) {
                         printf("DeepEP hybrid notify (GPU reduction) timeout, scale-out: %d/%d, scale-up: %d/%d, "
+                               "kNumSMs: %d, kNumQPs: %d, kNumChannels: %d, kNumChannelsPerSM: %d, "
                                "thread: %d, status: %d | %d, expected: %d\n",
-                               scaleout_rank_idx, kNumScaleoutRanks, scaleup_rank_idx, kNumScaleupRanks, thread_idx,
+                               scaleout_rank_idx, kNumScaleoutRanks, scaleup_rank_idx, kNumScaleupRanks,
+                               kNumSMs, kNumQPs, kNumChannels, kNumChannelsPerSM,
+                               thread_idx,
                                static_cast<int>(status >> 32), static_cast<int>(status & 0xffffffff), kNumSMs);
                     }
                     return false;
@@ -204,9 +208,12 @@ hybrid_dispatch_impl(
                         if (is_last_check) {
                             printf("DeepEP hybrid notify (scale-out %s reduction) timeout, "
                                    "scale-out: %d, scale-up: %d, "
+                                   "kNumSMs: %d, kNumQPs: %d, kNumChannels: %d, kNumChannelsPerSM: %d, "
                                    "thread: %d, wait scale-out: %d, decoded: %d\n",
                                    is_expert_reduction ? "expert" : "rank",
-                                   scaleout_rank_idx, scaleup_rank_idx, thread_idx, j,
+                                   scaleout_rank_idx, scaleup_rank_idx,
+                                   kNumSMs, kNumQPs, kNumChannels, kNumChannelsPerSM,
+                                   thread_idx, j,
                                    decoded);
                         }
                         return false;
@@ -289,10 +296,13 @@ hybrid_dispatch_impl(
                 }
 
                 if (is_last_check) {
-                    printf("DeepEP hybrid notify (scale-up reduction) timeout,"
+                    printf("DeepEP hybrid notify (scale-up reduction) timeout, "
                            "scale-out: %d/%d, scale-up: %d/%d, "
+                           "kNumSMs: %d, kNumQPs: %d, kNumChannels: %d, kNumChannelsPerSM: %d, "
                            "thread: %d, status: %d | %d, expected: %d\n",
-                           scaleout_rank_idx, kNumScaleoutRanks, scaleup_rank_idx, kNumScaleupRanks, thread_idx,
+                           scaleout_rank_idx, kNumScaleoutRanks, scaleup_rank_idx, kNumScaleupRanks,
+                           kNumSMs, kNumQPs, kNumChannels, kNumChannelsPerSM,
+                           thread_idx,
                            static_cast<int>(status >> 32), static_cast<int>(status & 0xffffffff), kNumScaleupRanks);
                 }
                 return false;
@@ -346,7 +356,20 @@ hybrid_dispatch_impl(
                 // For RDMA requests, "release" is ensured by "atomic"
                 gin.red_add_rel<ncclTeamTagRail>(ptr, signaled_tail - old_signaled_tail, lane_idx);
                 stored_old_scaleout_tail = stored_scaleout_tail;
+
+                // Debug: write local completion slot on final tail flush
+                if (finish_flag)
+                    *workspace_layout.get_put_completion_ptr(channel_idx, scaleout_rank_idx) = dispatch_epoch;
             }
+            __syncwarp();
+            // Debug: send put completion to all peers on final tail flush
+            if (finish_flag and lane_idx < kNumScaleoutRanks) {
+                gin.put<ncclTeamTagRail>(
+                    workspace_layout.get_put_completion_ptr(channel_idx, scaleout_rank_idx),
+                    workspace_layout.get_put_completion_ptr(channel_idx, scaleout_rank_idx),
+                    sizeof(int64_t), lane_idx, 0);
+            }
+            if (finish_flag) gin.flush<ncclCoopWarp>();
             __syncwarp();
         };
 
@@ -506,10 +529,22 @@ hybrid_dispatch_impl(
                 // Timeout
                 if (is_last_check) {
                     if (lane_idx < kNumScaleoutRanks) {
-                        printf("DeepEP hybrid dispatch (forwarding) timeout, scale-out: %d, scale-up: %d, "
-                               "channel: %d, lane: %d, old scale-out tail: %d, scale-out tail: (%d, %d)\n",
-                               scaleout_rank_idx, scaleup_rank_idx,
-                               channel_idx, lane_idx, stored_scaleout_old_tail_idx,
+                        const auto put_val = ptx::ld_acquire_sys<int64_t>(
+                            workspace_layout.get_put_completion_ptr(channel_idx, lane_idx));
+                        printf("DeepEP hybrid dispatch (forwarding) timeout, "
+                               "scale-out: %d/%d, scale-up: %d/%d, "
+                               "sm: %d, qp: %d, sharing: %d, "
+                               "kNumSMs: %d, kNumQPs: %d, kNumChannels: %d, kNumChannelsPerSM: %d, "
+                               "channel: %d, lane: %d, "
+                               "epoch: %lld, put: %lld, "
+                               "old tail: %d, tail: (%d, %d)\n",
+                               scaleout_rank_idx, kNumScaleoutRanks,
+                               scaleup_rank_idx, kNumScaleupRanks,
+                               sm_idx, qp_idx, static_cast<int>(sharing_mode),
+                               kNumSMs, kNumQPs, kNumChannels, kNumChannelsPerSM,
+                               channel_idx, lane_idx,
+                               dispatch_epoch, put_val,
+                               stored_scaleout_old_tail_idx,
                                stored_finish_flag, stored_scaleout_tail_idx);
                     }
                     return false;
@@ -655,6 +690,9 @@ hybrid_dispatch_impl(
         // Clean tails for next usages
         if (lane_idx < kNumScaleoutRanks)
             *workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, lane_idx) = 0;
+        // Clean put completion slots for next usages
+        if (lane_idx < kNumScaleoutRanks)
+            *workspace_layout.get_put_completion_ptr(channel_idx, lane_idx) = 0;
         __syncwarp();
     }
 

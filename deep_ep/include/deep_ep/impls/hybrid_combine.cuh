@@ -435,8 +435,10 @@ hybrid_combine_impl(nv_bfloat16* x,
                     #pragma unroll
                     for (int j = 0; j < kNumScaleupRanksPerLane; ++ j) {
                         printf("DeepEP combine (scale-up wait) timeout, scale-out: %d/%d, scale-up: %d/%d, "
+                               "kNumSMs: %d, kNumQPs: %d, kNumChannels: %d, kNumChannelsPerSM: %d, "
                                "channel: %d, lane: %d, recv: %d, tail: %d (wait=%d)\n",
                                scaleout_rank_idx, kNumScaleoutRanks, scaleup_rank_idx, kNumScaleupRanks,
+                               kNumSMs, kNumQPs, kNumChannels, kNumChannelsPerSM,
                                channel_idx, j * 32 + lane_idx,
                                stored_num_tokens_recv[j],
                                stored_cached_scaleup_tail[j],
@@ -643,11 +645,13 @@ hybrid_combine_impl(nv_bfloat16* x,
                     printf("DeepEP combine (scale-out wait all) timeout, "
                            "rank: %d, scale-out: %d/%d, scale-up: %d/%d, "
                            "sm: %d, fwd_warp: %d, channel: %d, qp: %d, sharing: %d, "
+                           "kNumSMs: %d, kNumQPs: %d, kNumChannels: %d, kNumChannelsPerSM: %d, "
                            "peer: %d, epoch: %lld, put: %lld, va: %lld\n",
                            scaleout_rank_idx * kNumScaleupRanks + scaleup_rank_idx,
                            scaleout_rank_idx, kNumScaleoutRanks, scaleup_rank_idx, kNumScaleupRanks,
                            sm_idx, forward_warp_idx, channel_idx,
                            qp_idx, static_cast<int>(sharing_mode),
+                           kNumSMs, kNumQPs, kNumChannels, kNumChannelsPerSM,
                            lane_idx, combine_epoch, put_val, va_val);
                 }
                 return false;

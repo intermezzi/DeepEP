@@ -44,6 +44,7 @@ public:
         void* buffer;
         void* workspace; void* mapped_host_workspace;
         int scaleout_rank_idx, scaleup_rank_idx;
+        int64_t dispatch_epoch;
 
         jit::LaunchArgs launch_args;
     };
@@ -121,7 +122,8 @@ static void __instantiate_kernel() {{
                 args.nccl_dev_comm, args.nccl_window,
                 args.buffer,
                 args.workspace, args.mapped_host_workspace,
-                args.scaleout_rank_idx, args.scaleup_rank_idx
+                args.scaleout_rank_idx, args.scaleup_rank_idx,
+                args.dispatch_epoch
             ));
         }
     }
@@ -195,6 +197,10 @@ static void launch_dispatch(void* x, void* sf,
         num_threads = (num_notify_warps + num_scaleout_warps + num_forward_warps) * 32;
     }
 
+    // Debug: monotonically increasing epoch for dispatch completion detection
+    static int64_t s_dispatch_epoch = 0;
+    const int64_t dispatch_epoch = ++s_dispatch_epoch;
+
     // Generate, build and launch
     const DispatchRuntime::Args args = {
         .is_scaleup_nvlink = is_scaleup_nvlink,
@@ -222,6 +228,7 @@ static void launch_dispatch(void* x, void* sf,
         .buffer = buffer,
         .workspace = workspace, .mapped_host_workspace = mapped_host_workspace,
         .scaleout_rank_idx = scaleout_rank_idx, .scaleup_rank_idx = scaleup_rank_idx,
+        .dispatch_epoch = dispatch_epoch,
         // NOTES: make cluster dim 2 to overlap with clustered computation kernels
         .launch_args = jit::LaunchArgs(num_sms, num_threads, num_smem_bytes, 2 - (num_sms % 2), true)};
     const auto code = DispatchRuntime::generate(args);
