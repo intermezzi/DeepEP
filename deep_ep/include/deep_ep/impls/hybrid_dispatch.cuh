@@ -346,6 +346,24 @@ hybrid_dispatch_impl(
         // Channel metadata maintenance
         EP_STATIC_ASSERT(kNumScaleoutRanks <= 32, "Invalid number of scale-out ranks");
         int stored_scaleout_tail = 0, stored_old_scaleout_tail = 0;
+
+        // Debug inject: drop dispatch tail signal to trigger forwarding timeout
+        constexpr bool kDebugDropDispatchVASignal = false;
+        constexpr bool kDebugDropDispatchPutSignal = false;
+        constexpr int kDebugDropSrcScaleoutRank = 0;
+        constexpr int kDebugDropDstScaleoutRank = 1;  // lane_idx (peer) to target
+        constexpr int kDebugDropChannel = 0;
+        const bool debug_drop_dispatch_va =
+            kDebugDropDispatchVASignal and
+            scaleout_rank_idx == kDebugDropSrcScaleoutRank and
+            lane_idx == kDebugDropDstScaleoutRank and
+            channel_idx == kDebugDropChannel;
+        const bool debug_drop_dispatch_put =
+            kDebugDropDispatchPutSignal and
+            scaleout_rank_idx == kDebugDropSrcScaleoutRank and
+            lane_idx == kDebugDropDstScaleoutRank and
+            channel_idx == kDebugDropChannel;
+
         const auto update_scaleout_tail = [&](const bool& finish_flag = false) {
             // Debug: drain all prior data and tail WQEs before issuing the final tail signal.
             if (finish_flag)
@@ -359,7 +377,8 @@ hybrid_dispatch_impl(
 
                 // NOTES: the "release" scope will be `sys` for the local rank (we may involve NVLink so not `gpu`)
                 // For RDMA requests, "release" is ensured by "atomic"
-                gin.red_add_rel<ncclTeamTagRail>(ptr, signaled_tail - old_signaled_tail, lane_idx);
+                if (not debug_drop_dispatch_va)
+                    gin.red_add_rel<ncclTeamTagRail>(ptr, signaled_tail - old_signaled_tail, lane_idx);
                 stored_old_scaleout_tail = stored_scaleout_tail;
 
                 // Debug: write local completion slot on final tail flush
@@ -368,7 +387,7 @@ hybrid_dispatch_impl(
             }
             __syncwarp();
             // Debug: send put completion to all peers on final tail flush
-            if (finish_flag and lane_idx < kNumScaleoutRanks) {
+            if (finish_flag and lane_idx < kNumScaleoutRanks and not debug_drop_dispatch_put) {
                 gin.put<ncclTeamTagRail>(
                     workspace_layout.get_put_completion_ptr(channel_idx, scaleout_rank_idx),
                     workspace_layout.get_put_completion_ptr(channel_idx, scaleout_rank_idx),

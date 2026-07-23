@@ -354,6 +354,21 @@ hybrid_combine_impl(nv_bfloat16* x,
         const auto forward_warp_idx = warp_idx - kNumScaleupWarps;
         const auto channel_idx = sm_idx * kNumChannelsPerSM + forward_warp_idx;
 
+        // Debug inject: drop combine tail signal to trigger scale-out wait timeout
+        constexpr bool kDebugDropCombineVASignal = false;
+        constexpr bool kDebugDropCombinePutSignal = false;
+        constexpr int kDebugDropSrcScaleoutRank = 0;
+        constexpr int kDebugDropDstScaleoutRank = 1;  // lane_idx (peer) to target
+        constexpr int kDebugDropChannel = 0;
+        const bool debug_drop_combine_signal =
+            scaleout_rank_idx == kDebugDropSrcScaleoutRank and
+            lane_idx == kDebugDropDstScaleoutRank and
+            channel_idx == kDebugDropChannel;
+        const bool debug_drop_combine_va =
+            kDebugDropCombineVASignal and debug_drop_combine_signal;
+        const bool debug_drop_combine_put =
+            kDebugDropCombinePutSignal and debug_drop_combine_signal;
+
         // Adjust registers
         if constexpr (kAdjustRegisters)
             ptx::warpgroup_reg_alloc<kNumRegistersForForwardWarps>();
@@ -597,7 +612,7 @@ hybrid_combine_impl(nv_bfloat16* x,
         if (ptx::elect_one_sync() && dt > kNumTimeoutCycles / 4)   // e.g. >25s
             printf("DeepEP combine flush slow: channel=%d scaleout=%d scaleup=%d cycles=%lld\n",
                    channel_idx, scaleout_rank_idx, scaleup_rank_idx, (long long)dt);
-        if (lane_idx < kNumScaleoutRanks) {
+        if (lane_idx < kNumScaleoutRanks and not debug_drop_combine_va) {
             // Update remote tails
             gin.red_add_rel<ncclTeamTagRail>(
                 workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, scaleout_rank_idx),
@@ -612,7 +627,7 @@ hybrid_combine_impl(nv_bfloat16* x,
             *completion_slot = combine_epoch;
         }
         __syncwarp();
-        if (lane_idx < kNumScaleoutRanks) {
+        if (lane_idx < kNumScaleoutRanks and not debug_drop_combine_put) {
             auto* completion_slot = workspace_layout.get_put_completion_ptr(channel_idx, scaleout_rank_idx);
             gin.put<ncclTeamTagRail>(
                 completion_slot,      // remote dst (symmetric addr on peer)
