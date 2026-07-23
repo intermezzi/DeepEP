@@ -347,6 +347,10 @@ hybrid_dispatch_impl(
         EP_STATIC_ASSERT(kNumScaleoutRanks <= 32, "Invalid number of scale-out ranks");
         int stored_scaleout_tail = 0, stored_old_scaleout_tail = 0;
         const auto update_scaleout_tail = [&](const bool& finish_flag = false) {
+            // Debug: drain all prior data and tail WQEs before issuing the final tail signal.
+            if (finish_flag)
+                gin.flush<ncclCoopWarp>();
+
             if (lane_idx < kNumScaleoutRanks and
                 (stored_scaleout_tail >= stored_old_scaleout_tail + kScaleoutUpdateInterval or finish_flag)) {
                 const auto signaled_tail = math::pack2<int, int64_t>(finish_flag, stored_scaleout_tail);
