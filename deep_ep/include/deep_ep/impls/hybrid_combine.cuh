@@ -674,7 +674,6 @@ hybrid_combine_impl(nv_bfloat16* x,
                            qp_idx, static_cast<int>(sharing_mode),
                            kNumSMs, kNumQPs, kNumChannels, kNumChannelsPerSM,
                            lane_idx, combine_epoch, put_val, va_val);
-                    comm::poll_cqe_on_timeout(gin, lane_idx, qp_idx);
 
                     // This lane is blocked on the "done" signal from scale-out rank `lane_idx`,
                     // which never arrived -- i.e. the rail QP to that peer is wedged. The same QP

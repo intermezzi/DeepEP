@@ -365,10 +365,6 @@ hybrid_dispatch_impl(
             channel_idx == kDebugDropChannel;
 
         const auto update_scaleout_tail = [&](const bool& finish_flag = false) {
-            // Debug: drain all prior data and tail WQEs before issuing the final tail signal.
-            if (finish_flag)
-                gin.flush<ncclCoopWarp>();
-
             if (lane_idx < kNumScaleoutRanks and
                 (stored_scaleout_tail >= stored_old_scaleout_tail + kScaleoutUpdateInterval or finish_flag)) {
                 const auto signaled_tail = math::pack2<int, int64_t>(finish_flag, stored_scaleout_tail);
@@ -570,7 +566,6 @@ hybrid_dispatch_impl(
                                dispatch_epoch, put_val,
                                stored_scaleout_old_tail_idx,
                                stored_finish_flag, stored_scaleout_tail_idx);
-                        comm::poll_cqe_on_timeout(gin, lane_idx, qp_idx);
                     }
 
                     // The forward warp only *reads* memory that scale-out peers RDMA-write into
